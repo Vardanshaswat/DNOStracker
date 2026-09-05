@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ApiError,
   api,
   formatHour,
   hourLabel,
@@ -9,7 +10,9 @@ import {
   type MarkerMeta,
   type MarkerScore,
   type Settings,
+  type User,
 } from "./api";
+import Login from "./Login";
 
 const SCORE_LABELS = ["Low", "Soft", "OK", "Strong", "Peak"];
 
@@ -88,7 +91,13 @@ function ScorePicker({
   );
 }
 
-export default function App() {
+function Tracker({
+  user,
+  onLogout,
+}: {
+  user: User;
+  onLogout: () => void;
+}) {
   const [markers, setMarkers] = useState<MarkerMeta[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [clock, setClock] = useState<ClockState | null>(null);
@@ -130,6 +139,10 @@ export default function App() {
         setScores({ health: 3, work: 3, stress: 3 });
       }
     } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        onLogout();
+        return;
+      }
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
       setLoading(false);
@@ -255,9 +268,28 @@ export default function App() {
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
       <header className="animate-rise mb-8">
-        <p className="text-sm font-semibold tracking-[0.18em] text-leaf uppercase">
-          DNOStracker
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <p className="text-sm font-semibold tracking-[0.18em] text-leaf uppercase">
+            DNOStracker
+          </p>
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-moss text-xs font-bold text-sand">
+              {user.username.slice(0, 1).toUpperCase()}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-moss">
+                {user.username}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void onLogout()}
+              className="rounded-xl border border-moss/15 bg-white/70 px-3 py-1.5 text-xs font-semibold text-moss hover:bg-white"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
         <h1 className="mt-2 font-display text-4xl leading-tight text-moss sm:text-5xl">
           Hourly habit pulse
         </h1>
@@ -542,4 +574,51 @@ export default function App() {
       </section>
     </main>
   );
+}
+
+export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const me = await api.me();
+        if (!cancelled) setUser(me.user);
+      } catch {
+        if (!cancelled) setUser(null);
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const onSignedIn = useCallback((next: User) => {
+    setUser(next);
+  }, []);
+
+  const onLogout = useCallback(() => {
+    void api.logout().catch(() => undefined);
+    setUser(null);
+  }, []);
+
+  if (!ready) {
+    return (
+      <main className="mx-auto flex min-h-screen max-w-5xl items-center justify-center px-4">
+        <p className="animate-pulse-soft font-display text-2xl text-moss">
+          Loading your hourly pulse…
+        </p>
+      </main>
+    );
+  }
+
+  if (!user) {
+    return <Login onSignedIn={onSignedIn} />;
+  }
+
+  return <Tracker user={user} onLogout={onLogout} />;
 }

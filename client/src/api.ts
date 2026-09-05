@@ -18,6 +18,11 @@ export type MarkerScore = {
   note?: string;
 };
 
+export type User = {
+  id: string;
+  username: string;
+};
+
 export type HourlyEntry = {
   id: string;
   date: string;
@@ -64,8 +69,18 @@ export type DaySummary = {
   reports: { hour: number; report: string; markers: Marker[] }[];
 };
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
+    credentials: "include",
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     ...init,
   });
@@ -75,12 +90,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       typeof data.error === "string"
         ? data.error
         : "Request failed. Check the API server.";
-    throw new Error(message);
+    throw new ApiError(message, res.status);
   }
   return data as T;
 }
 
 export const api = {
+  me: () => request<{ user: User }>("/api/auth/me"),
+  signup: (username: string, password: string) =>
+    request<{ user: User }>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  login: (username: string, password: string) =>
+    request<{ user: User }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   markers: () => request<{ markers: MarkerMeta[] }>("/api/markers"),
   settings: () =>
     request<{ settings: Settings; awakeHours: number[] }>("/api/settings"),

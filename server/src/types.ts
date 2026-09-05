@@ -26,8 +26,17 @@ export type MarkerScore = {
   note?: string | undefined;
 };
 
+export type User = {
+  id: string;
+  username: string;
+  passwordHash: string;
+  passwordSalt: string;
+  createdAt: string;
+};
+
 export type HourlyEntry = {
   id: string;
+  userId: string;
   date: string; // YYYY-MM-DD
   hour: number; // 0-23
   markers: MarkerScore[];
@@ -46,9 +55,10 @@ export type Settings = {
 export type AwakeOverrides = Record<string, number[]>;
 
 export type Store = {
-  settings: Settings;
+  users: User[];
+  settingsByUser: Record<string, Settings>;
   entries: HourlyEntry[];
-  awakeOverrides: AwakeOverrides;
+  awakeOverridesByUser: Record<string, AwakeOverrides>;
 };
 
 export const DEFAULT_SETTINGS: Settings = {

@@ -1,7 +1,23 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import { z } from "zod";
 import { v4 as uuid } from "uuid";
+import { loadEnv } from "./env.js";
+import { rateLimit } from "./rateLimit.js";
+import {
+  AuthError,
+  clearSessionCookie,
+  corsOrigin,
+  login,
+  publicUser,
+  requireAuth,
+  setSessionCookie,
+  signSession,
+  signup,
+} from "./auth.js";
 import {
   getAwakeHoursForDate,
   getEntry,
@@ -17,9 +33,54 @@ import {
   scheduledAwakeHours,
   trackableHours,
 } from "./time.js";
-import { MARKERS, MARKER_LABELS, type Marker } from "./types.js";
+import { MARKERS, MARKER_LABELS, type Marker, type User } from "./types.js";
+
+loadEnv();
 
 const PORT = Number(process.env.PORT ?? 3847);
+const IS_PROD = process.env.NODE_ENV === "production";
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+if (IS_PROD && !process.env.JWT_SECRET?.trim()) {
+  console.error("JWT_SECRET is required in production");
+  process.exit(1);
+}
+
+function clientDistDir(): string {
+  if (process.env.CLIENT_DIST) return path.resolve(process.env.CLIENT_DIST);
+  return path.resolve(here, "..", "..", "client", "dist");
+}
+
+function serveClient(app: express.Express) {
+  const dist = clientDistDir();
+  const index = path.join(dist, "index.html");
+  if (!existsSync(index)) {
+    console.warn(`Client build not found at ${dist} — API-only mode`);
+    app.get("/", (_req, res) => {
+      res
+        .status(503)
+        .type("html")
+        .send(
+          "<!doctype html><p>DNOStracker UI is missing from this deploy. Check that the client built into <code>client/dist</code>.</p>",
+        );
+    });
+    return;
+  }
+  app.use(express.static(dist, { index: false, maxAge: "1h" }));
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      next();
+      return;
+    }
+    if (req.path.startsWith("/api")) {
+      next();
+      return;
+    }
+    res.sendFile(index);
+  });
+}
+
+const authLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 15 });
 
 const markerSchema = z.object({
   marker: z.enum(MARKERS),
@@ -45,27 +106,92 @@ const awakeBodySchema = z.object({
   hour: z.number().int().min(0).max(23).optional(),
 });
 
+const credentialsSchema = z.object({
+  username: z.string().min(1).max(24),
+  password: z.string().min(1).max(128),
+});
+
+function currentUser(req: express.Request): User {
+  const user = req.user;
+  if (!user) throw new Error("Sign in required");
+  return user;
+}
+
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.use(
+  cors({
+    origin: corsOrigin,
+    credentials: true,
+  }),
+);
+app.use(express.json({ limit: "32kb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "dnostracker-api" });
 });
 
-app.get("/api/markers", (_req, res) => {
+app.post("/api/auth/signup", authLimit, async (req, res) => {
+  const parsed = credentialsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Username and password are required" });
+    return;
+  }
+  try {
+    const user = await signup(parsed.data.username, parsed.data.password);
+    setSessionCookie(res, signSession(user));
+    res.status(201).json({ user: publicUser(user) });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: "Could not create account" });
+  }
+});
+
+app.post("/api/auth/login", authLimit, async (req, res) => {
+  const parsed = credentialsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Username and password are required" });
+    return;
+  }
+  try {
+    const user = await login(parsed.data.username, parsed.data.password);
+    setSessionCookie(res, signSession(user));
+    res.json({ user: publicUser(user) });
+  } catch (err) {
+    if (err instanceof AuthError) {
+      res.status(err.status).json({ error: err.message });
+      return;
+    }
+    res.status(500).json({ error: "Could not sign in" });
+  }
+});
+
+app.post("/api/auth/logout", (_req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/auth/me", requireAuth, (req, res) => {
+  res.json({ user: publicUser(currentUser(req)) });
+});
+
+app.get("/api/markers", requireAuth, (_req, res) => {
   res.json({
     markers: MARKERS.map((id) => ({ id, label: MARKER_LABELS[id] })),
   });
 });
 
-app.get("/api/settings", async (_req, res) => {
-  const settings = await getSettings();
+app.get("/api/settings", requireAuth, async (req, res) => {
+  const settings = await getSettings(currentUser(req).id);
   const awake = scheduledAwakeHours(settings);
   res.json({ settings, scheduledAwakeHours: awake, awakeHours: awake });
 });
 
-app.put("/api/settings", async (req, res) => {
+app.put("/api/settings", requireAuth, async (req, res) => {
   const parsed = settingsSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
@@ -85,16 +211,17 @@ app.put("/api/settings", async (req, res) => {
   if (parsed.data.timezoneOffsetMinutes !== undefined) {
     patch.timezoneOffsetMinutes = parsed.data.timezoneOffsetMinutes;
   }
-  const settings = await updateSettings(patch);
+  const settings = await updateSettings(currentUser(req).id, patch);
   const awake = scheduledAwakeHours(settings);
   res.json({ settings, scheduledAwakeHours: awake, awakeHours: awake });
 });
 
-app.get("/api/clock", async (_req, res) => {
-  const settings = await getSettings();
+app.get("/api/clock", requireAuth, async (req, res) => {
+  const userId = currentUser(req).id;
+  const settings = await getSettings(userId);
   const clock = localClock(settings);
-  const overrides = await getAwakeHoursForDate(clock.date);
-  const existing = await getEntry(clock.date, clock.hour);
+  const overrides = await getAwakeHoursForDate(userId, clock.date);
+  const existing = await getEntry(userId, clock.date, clock.hour);
   const markedAwake = overrides.includes(clock.hour);
   const trackingActive =
     !clock.inSleepSchedule || markedAwake || !!existing;
@@ -112,17 +239,18 @@ app.get("/api/clock", async (_req, res) => {
   });
 });
 
-app.post("/api/awake", async (req, res) => {
+app.post("/api/awake", requireAuth, async (req, res) => {
   const parsed = awakeBodySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
-  const settings = await getSettings();
+  const userId = currentUser(req).id;
+  const settings = await getSettings(userId);
   const clock = localClock(settings);
   const date = parsed.data.date ?? clock.date;
   const hour = parsed.data.hour ?? clock.hour;
-  const hours = await markAwake(date, hour);
+  const hours = await markAwake(userId, date, hour);
   res.json({
     date,
     hour,
@@ -131,18 +259,23 @@ app.post("/api/awake", async (req, res) => {
   });
 });
 
-app.get("/api/entries", async (req, res) => {
+app.get("/api/entries", requireAuth, async (req, res) => {
   const date = typeof req.query.date === "string" ? req.query.date : undefined;
-  res.json({ entries: await listEntries(date) });
+  res.json({ entries: await listEntries(currentUser(req).id, date) });
 });
 
-app.get("/api/entries/:date/:hour", async (req, res) => {
+app.get("/api/entries/:date/:hour", requireAuth, async (req, res) => {
+  const date = req.params.date;
   const hour = Number(req.params.hour);
+  if (typeof date !== "string") {
+    res.status(400).json({ error: "Invalid date" });
+    return;
+  }
   if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
     res.status(400).json({ error: "Invalid hour" });
     return;
   }
-  const entry = await getEntry(req.params.date, hour);
+  const entry = await getEntry(currentUser(req).id, date, hour);
   if (!entry) {
     res.status(404).json({ error: "Entry not found" });
     return;
@@ -150,14 +283,15 @@ app.get("/api/entries/:date/:hour", async (req, res) => {
   res.json({ entry });
 });
 
-app.post("/api/entries", async (req, res) => {
+app.post("/api/entries", requireAuth, async (req, res) => {
   const parsed = entryBodySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
   }
 
-  const settings = await getSettings();
+  const userId = currentUser(req).id;
+  const settings = await getSettings(userId);
   const clock = localClock(settings);
   const date = parsed.data.date ?? clock.date;
   const hour = parsed.data.hour ?? clock.hour;
@@ -169,11 +303,11 @@ app.post("/api/entries", async (req, res) => {
   }
 
   if (isInSleepSchedule(hour, settings)) {
-    await markAwake(date, hour);
+    await markAwake(userId, date, hour);
   }
 
   const now = new Date().toISOString();
-  const existing = await getEntry(date, hour);
+  const existing = await getEntry(userId, date, hour);
   const markers = parsed.data.markers.map((m) => {
     const item: { marker: Marker; score: number; note?: string } = {
       marker: m.marker,
@@ -184,6 +318,7 @@ app.post("/api/entries", async (req, res) => {
   });
   const entry = await upsertEntry({
     id: existing?.id ?? uuid(),
+    userId,
     date,
     hour,
     markers,
@@ -195,13 +330,14 @@ app.post("/api/entries", async (req, res) => {
   res.status(existing ? 200 : 201).json({ entry });
 });
 
-app.get("/api/day-summary", async (req, res) => {
-  const settings = await getSettings();
+app.get("/api/day-summary", requireAuth, async (req, res) => {
+  const userId = currentUser(req).id;
+  const settings = await getSettings(userId);
   const clock = localClock(settings);
   const date =
     typeof req.query.date === "string" ? req.query.date : clock.date;
-  const entries = await listEntries(date);
-  const overrides = await getAwakeHoursForDate(date);
+  const entries = await listEntries(userId, date);
+  const overrides = await getAwakeHoursForDate(userId, date);
   const loggedHours = entries.map((e) => e.hour);
   const awake = trackableHours(settings, overrides, loggedHours);
   const markedAwakeNow =
@@ -252,6 +388,11 @@ app.get("/api/day-summary", async (req, res) => {
   });
 });
 
+if (IS_PROD) {
+  serveClient(app);
+}
+
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`DNOStracker API listening on http://127.0.0.1:${PORT}`);
+  const mode = IS_PROD ? "production" : "development";
+  console.log(`DNOStracker listening on http://127.0.0.1:${PORT} (${mode})`);
 });

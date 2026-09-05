@@ -1,37 +1,59 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { v4 as uuid } from "uuid";
 import {
   DEFAULT_SETTINGS,
   type AwakeOverrides,
   type HourlyEntry,
   type Settings,
   type Store,
+  type User,
 } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "..", "data");
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.join(__dirname, "..", "data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
+
+function emptyStore(): Store {
+  return {
+    users: [],
+    settingsByUser: {},
+    entries: [],
+    awakeOverridesByUser: {},
+  };
+}
 
 async function ensureStore(): Promise<Store> {
   await mkdir(DATA_DIR, { recursive: true });
   try {
     const raw = await readFile(DATA_FILE, "utf8");
-    const parsed = JSON.parse(raw) as Partial<Store>;
+    const parsed = JSON.parse(raw) as Partial<Store> & {
+      settings?: Settings;
+      awakeOverrides?: AwakeOverrides;
+    };
+    const entries = Array.isArray(parsed.entries)
+      ? parsed.entries.filter((e) => typeof e.userId === "string")
+      : [];
     return {
-      settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
-      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-      awakeOverrides:
-        parsed.awakeOverrides && typeof parsed.awakeOverrides === "object"
-          ? parsed.awakeOverrides
+      users: Array.isArray(parsed.users)
+        ? parsed.users.filter(isPasswordUser)
+        : [],
+      settingsByUser:
+        parsed.settingsByUser && typeof parsed.settingsByUser === "object"
+          ? parsed.settingsByUser
+          : {},
+      entries,
+      awakeOverridesByUser:
+        parsed.awakeOverridesByUser &&
+        typeof parsed.awakeOverridesByUser === "object"
+          ? parsed.awakeOverridesByUser
           : {},
     };
   } catch {
-    const initial: Store = {
-      settings: DEFAULT_SETTINGS,
-      entries: [],
-      awakeOverrides: {},
-    };
+    const initial = emptyStore();
     await writeFile(DATA_FILE, JSON.stringify(initial, null, 2), "utf8");
     return initial;
   }
@@ -46,36 +68,94 @@ export async function saveStore(store: Store): Promise<void> {
   await writeFile(DATA_FILE, JSON.stringify(store, null, 2), "utf8");
 }
 
-export async function getSettings(): Promise<Settings> {
+function isPasswordUser(value: unknown): value is User {
+  if (!value || typeof value !== "object") return false;
+  const u = value as Partial<User>;
+  return (
+    typeof u.id === "string" &&
+    typeof u.username === "string" &&
+    typeof u.passwordHash === "string" &&
+    typeof u.passwordSalt === "string"
+  );
+}
+
+export async function getUserById(id: string): Promise<User | undefined> {
   const store = await getStore();
-  return store.settings;
+  return store.users.find((u) => u.id === id);
+}
+
+export async function getUserByUsername(
+  username: string,
+): Promise<User | undefined> {
+  const store = await getStore();
+  return store.users.find((u) => u.username === username);
+}
+
+export async function createUser(input: {
+  username: string;
+  passwordHash: string;
+  passwordSalt: string;
+}): Promise<User> {
+  const store = await getStore();
+  if (store.users.some((u) => u.username === input.username)) {
+    throw new Error("That username is already taken");
+  }
+  const user: User = {
+    id: uuid(),
+    username: input.username,
+    passwordHash: input.passwordHash,
+    passwordSalt: input.passwordSalt,
+    createdAt: new Date().toISOString(),
+  };
+  store.users.push(user);
+  store.settingsByUser[user.id] = { ...DEFAULT_SETTINGS };
+  await saveStore(store);
+  return user;
+}
+
+export async function getSettings(userId: string): Promise<Settings> {
+  const store = await getStore();
+  const existing = store.settingsByUser[userId];
+  if (existing) return existing;
+  const settings = { ...DEFAULT_SETTINGS };
+  store.settingsByUser[userId] = settings;
+  await saveStore(store);
+  return settings;
 }
 
 export async function updateSettings(
+  userId: string,
   patch: Partial<Settings>,
 ): Promise<Settings> {
   const store = await getStore();
-  store.settings = { ...store.settings, ...patch };
+  const current = store.settingsByUser[userId] ?? { ...DEFAULT_SETTINGS };
+  const next = { ...current, ...patch };
+  store.settingsByUser[userId] = next;
   await saveStore(store);
-  return store.settings;
+  return next;
 }
 
-export async function listEntries(date?: string): Promise<HourlyEntry[]> {
+export async function listEntries(
+  userId: string,
+  date?: string,
+): Promise<HourlyEntry[]> {
   const store = await getStore();
-  const entries = date
-    ? store.entries.filter((e) => e.date === date)
-    : store.entries;
+  const entries = store.entries.filter((e) => {
+    if (e.userId !== userId) return false;
+    return date ? e.date === date : true;
+  });
   return entries.sort((a, b) =>
     a.date === b.date ? a.hour - b.hour : a.date.localeCompare(b.date),
   );
 }
 
-export async function upsertEntry(
-  entry: HourlyEntry,
-): Promise<HourlyEntry> {
+export async function upsertEntry(entry: HourlyEntry): Promise<HourlyEntry> {
   const store = await getStore();
   const idx = store.entries.findIndex(
-    (e) => e.date === entry.date && e.hour === entry.hour,
+    (e) =>
+      e.userId === entry.userId &&
+      e.date === entry.date &&
+      e.hour === entry.hour,
   );
   if (idx >= 0) {
     const previous = store.entries[idx]!;
@@ -83,6 +163,7 @@ export async function upsertEntry(
       ...previous,
       ...entry,
       id: previous.id,
+      userId: previous.userId,
       createdAt: previous.createdAt,
       updatedAt: entry.updatedAt,
     };
@@ -96,33 +177,36 @@ export async function upsertEntry(
 }
 
 export async function getEntry(
+  userId: string,
   date: string,
   hour: number,
 ): Promise<HourlyEntry | undefined> {
   const store = await getStore();
-  return store.entries.find((e) => e.date === date && e.hour === hour);
-}
-
-export async function getAwakeOverrides(): Promise<AwakeOverrides> {
-  const store = await getStore();
-  return store.awakeOverrides ?? {};
+  return store.entries.find(
+    (e) => e.userId === userId && e.date === date && e.hour === hour,
+  );
 }
 
 export async function markAwake(
+  userId: string,
   date: string,
   hour: number,
 ): Promise<number[]> {
   const store = await getStore();
-  if (!store.awakeOverrides) store.awakeOverrides = {};
-  const current = new Set(store.awakeOverrides[date] ?? []);
+  const forUser = store.awakeOverridesByUser[userId] ?? {};
+  store.awakeOverridesByUser[userId] = forUser;
+  const current = new Set(forUser[date] ?? []);
   current.add(hour);
   const hours = [...current].sort((a, b) => a - b);
-  store.awakeOverrides[date] = hours;
+  forUser[date] = hours;
   await saveStore(store);
   return hours;
 }
 
-export async function getAwakeHoursForDate(date: string): Promise<number[]> {
+export async function getAwakeHoursForDate(
+  userId: string,
+  date: string,
+): Promise<number[]> {
   const store = await getStore();
-  return store.awakeOverrides?.[date] ?? [];
+  return store.awakeOverridesByUser[userId]?.[date] ?? [];
 }

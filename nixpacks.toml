@@ -1,0 +1,16 @@
+# Fallback if Railway uses Railpack/Nixpacks instead of Docker.
+# NODE_ENV=production would otherwise skip client/server build tools.
+[phases.install]
+cmds = [
+  "npm ci --include=dev --prefix server",
+  "npm ci --include=dev --prefix client"
+]
+
+[phases.build]
+cmds = [
+  "npm run build --prefix client",
+  "npm run build --prefix server"
+]
+
+[start]
+cmd = "node server/dist/index.js"
