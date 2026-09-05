@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   DEFAULT_SETTINGS,
+  type AwakeOverrides,
   type HourlyEntry,
   type Settings,
   type Store,
@@ -16,13 +17,21 @@ async function ensureStore(): Promise<Store> {
   await mkdir(DATA_DIR, { recursive: true });
   try {
     const raw = await readFile(DATA_FILE, "utf8");
-    const parsed = JSON.parse(raw) as Store;
+    const parsed = JSON.parse(raw) as Partial<Store>;
     return {
       settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
       entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+      awakeOverrides:
+        parsed.awakeOverrides && typeof parsed.awakeOverrides === "object"
+          ? parsed.awakeOverrides
+          : {},
     };
   } catch {
-    const initial: Store = { settings: DEFAULT_SETTINGS, entries: [] };
+    const initial: Store = {
+      settings: DEFAULT_SETTINGS,
+      entries: [],
+      awakeOverrides: {},
+    };
     await writeFile(DATA_FILE, JSON.stringify(initial, null, 2), "utf8");
     return initial;
   }
@@ -92,4 +101,28 @@ export async function getEntry(
 ): Promise<HourlyEntry | undefined> {
   const store = await getStore();
   return store.entries.find((e) => e.date === date && e.hour === hour);
+}
+
+export async function getAwakeOverrides(): Promise<AwakeOverrides> {
+  const store = await getStore();
+  return store.awakeOverrides ?? {};
+}
+
+export async function markAwake(
+  date: string,
+  hour: number,
+): Promise<number[]> {
+  const store = await getStore();
+  if (!store.awakeOverrides) store.awakeOverrides = {};
+  const current = new Set(store.awakeOverrides[date] ?? []);
+  current.add(hour);
+  const hours = [...current].sort((a, b) => a - b);
+  store.awakeOverrides[date] = hours;
+  await saveStore(store);
+  return hours;
+}
+
+export async function getAwakeHoursForDate(date: string): Promise<number[]> {
+  const store = await getStore();
+  return store.awakeOverrides?.[date] ?? [];
 }

@@ -12,8 +12,8 @@ export function formatDate(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Sleep window can wrap midnight. Sleeping if hour in [start, 24) U [0, end). */
-export function isSleeping(hour: number, settings: Settings): boolean {
+/** Usual sleep schedule — advisory only, can be overridden when awake. */
+export function isInSleepSchedule(hour: number, settings: Settings): boolean {
   const { sleepStartHour, sleepEndHour } = settings;
   if (sleepStartHour === sleepEndHour) return false;
   if (sleepStartHour < sleepEndHour) {
@@ -22,17 +22,31 @@ export function isSleeping(hour: number, settings: Settings): boolean {
   return hour >= sleepStartHour || hour < sleepEndHour;
 }
 
-export function awakeHours(settings: Settings): number[] {
+export function scheduledAwakeHours(settings: Settings): number[] {
   return Array.from({ length: 24 }, (_, h) => h).filter(
-    (h) => !isSleeping(h, settings),
+    (h) => !isInSleepSchedule(h, settings),
   );
+}
+
+/** Hours to track today: schedule + same-day awake overrides + already logged hours. */
+export function trackableHours(
+  settings: Settings,
+  overrideHours: number[],
+  loggedHours: number[] = [],
+): number[] {
+  const set = new Set([
+    ...scheduledAwakeHours(settings),
+    ...overrideHours,
+    ...loggedHours,
+  ]);
+  return [...set].sort((a, b) => a - b);
 }
 
 export function localClock(settings: Settings): {
   date: string;
   hour: number;
   minute: number;
-  sleeping: boolean;
+  inSleepSchedule: boolean;
 } {
   const d = nowInOffset(settings.timezoneOffsetMinutes);
   const hour = d.getHours();
@@ -40,6 +54,6 @@ export function localClock(settings: Settings): {
     date: formatDate(d),
     hour,
     minute: d.getMinutes(),
-    sleeping: isSleeping(hour, settings),
+    inSleepSchedule: isInSleepSchedule(hour, settings),
   };
 }

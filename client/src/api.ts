@@ -38,7 +38,9 @@ export type ClockState = {
   date: string;
   hour: number;
   minute: number;
+  inSleepSchedule: boolean;
   sleeping: boolean;
+  markedAwake: boolean;
   trackingActive: boolean;
   entryForHour: HourlyEntry | null;
   needsCheckIn: boolean;
@@ -47,7 +49,10 @@ export type ClockState = {
 export type DaySummary = {
   date: string;
   sleepingNow: boolean;
+  inSleepSchedule: boolean;
+  awakeOverrideHours: number[];
   awakeHours: number[];
+  scheduledAwakeHours: number[];
   loggedHours: number[];
   missingHours: number[];
   markerAverages: {
@@ -85,8 +90,16 @@ export const api = {
       body: JSON.stringify(body),
     }),
   clock: () => request<ClockState>("/api/clock"),
-  entries: (date: string) =>
-    request<{ entries: HourlyEntry[] }>(`/api/entries?date=${date}`),
+  markAwake: (body?: { date?: string; hour?: number }) =>
+    request<{
+      date: string;
+      hour: number;
+      awakeOverrideHours: number[];
+      message: string;
+    }>("/api/awake", {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
   saveEntry: (body: {
     date?: string;
     hour?: number;

@@ -1,6 +1,6 @@
 # DNOStracker
 
-Hourly habit tracker for waking hours. Log a few of your life markers each hour and leave a short report. Tracking pauses automatically during your sleep window.
+Hourly habit tracker for waking hours. Log a few life markers each hour and leave a short report. The sleep window is a flexible daily schedule — adjust it anytime, and if you wake early or stay up late you can still track that hour.
 
 ## Markers
 
@@ -14,32 +14,31 @@ Hourly habit tracker for waking hours. Log a few of your life markers each hour 
 
 ## Stack
 
-- **Frontend:** React + TypeScript + Vite + Tailwind CSS
-- **Backend:** Node.js + Express API (JSON file store in `server/data/`)
+- **Frontend:** React + TypeScript + Vite + Tailwind CSS (`client/`)
+- **Backend:** Node.js + Express API (`server/`) with a JSON file store
 
 ## Run locally
 
 ```bash
-# install
+git clone https://github.com/Vardanshaswat/DNOStracker.git
+cd DNOStracker
 npm run install:all
+npm run dev
+```
 
-# terminal 1 — API on http://127.0.0.1:3847
+- UI: http://127.0.0.1:4179
+- API: http://127.0.0.1:3847
+
+Or run separately:
+
+```bash
 npm run dev:server
-
-# terminal 2 — UI on http://127.0.0.1:4179
 npm run dev:client
 ```
 
-The Vite dev server proxies `/api` to the Express backend.
+## Behavior
 
-## API overview
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/clock` | Local date/hour, sleep status, whether this hour needs a check-in |
-| GET/PUT | `/api/settings` | Sleep window + timezone offset |
-| GET | `/api/markers` | Marker list |
-| GET/POST | `/api/entries` | List or save an hourly pulse (blocked in sleep hours) |
-| GET | `/api/day-summary` | Averages, missing hours, reports for a day |
-
-Default sleep window: **23:00 → 07:00** (configurable in the UI).
+- Hourly check-ins for any subset of markers (score 1–5) + a short report
+- Sleep window is adjustable any time during the day
+- Sleep does **not** hard-block tracking — tap **I’m awake** (or just save) to log that hour
+- Saving during the sleep window auto-marks the hour as awake for today

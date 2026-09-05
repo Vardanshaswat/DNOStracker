@@ -42,9 +42,13 @@ export type Settings = {
   timezoneOffsetMinutes: number;
 };
 
+/** Per-day hours marked awake even if they fall in the usual sleep window. */
+export type AwakeOverrides = Record<string, number[]>;
+
 export type Store = {
   settings: Settings;
   entries: HourlyEntry[];
+  awakeOverrides: AwakeOverrides;
 };
 
 export const DEFAULT_SETTINGS: Settings = {

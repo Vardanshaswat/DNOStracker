@@ -2,7 +2,7 @@
   "name": "dnostracker",
   "version": "1.0.0",
   "private": true,
-  "description": "Hourly habit tracker for health, work, prep, workout, social, stress, and study — paused while you sleep.",
+  "description": "Hourly habit tracker for health, work, prep, workout, social, stress, and study — with a flexible sleep window.",
   "scripts": {
     "install:all": "npm install --prefix server && npm install --prefix client",
     "dev": "concurrently -n api,web -c green,cyan \"npm run dev --prefix server\" \"npm run dev --prefix client\"",

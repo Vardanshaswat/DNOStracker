@@ -14,21 +14,48 @@ import {
 const SCORE_LABELS = ["Low", "Soft", "OK", "Strong", "Peak"];
 
 function SleepBanner({
-  sleeping,
+  clock,
   settings,
+  onAwake,
+  busy,
 }: {
-  sleeping: boolean;
+  clock: ClockState;
   settings: Settings | null;
+  onAwake: () => void;
+  busy: boolean;
 }) {
-  if (!sleeping || !settings) return null;
+  if (!clock.inSleepSchedule || !settings) return null;
+
+  if (clock.trackingActive) {
+    return (
+      <div className="animate-rise rounded-2xl border border-leaf/25 bg-leaf/10 px-5 py-4 text-leaf">
+        <p className="font-display text-xl tracking-tight text-moss">
+          You’re awake during the sleep window
+        </p>
+        <p className="mt-1 text-sm text-ink/70">
+          Usual sleep is {hourLabel(settings.sleepStartHour)}–
+          {hourLabel(settings.sleepEndHour)}. This hour is open for tracking.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="animate-rise rounded-2xl border border-moss/15 bg-moss px-5 py-4 text-sand shadow-lg shadow-moss/20">
-      <p className="font-display text-xl tracking-tight">Sleep window active</p>
+      <p className="font-display text-xl tracking-tight">Usual sleep window</p>
       <p className="mt-1 text-sm text-sand/80">
-        Hourly tracking is paused from {hourLabel(settings.sleepStartHour)} to{" "}
-        {hourLabel(settings.sleepEndHour)}. Rest now — check-ins resume when
-        you wake.
+        Schedule says {hourLabel(settings.sleepStartHour)}–
+        {hourLabel(settings.sleepEndHour)}. If you’re awake, mark it and log —
+        nothing is blocked.
       </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onAwake}
+        className="mt-3 rounded-xl bg-amber px-4 py-2 text-sm font-bold text-ink disabled:opacity-50"
+      >
+        I’m awake — track this hour
+      </button>
     </div>
   );
 }
@@ -89,8 +116,7 @@ export default function App() {
       setSleepStart(settingsRes.settings.sleepStartHour);
       setSleepEnd(settingsRes.settings.sleepEndHour);
       setClock(clockRes);
-      const day = await api.daySummary(clockRes.date);
-      setSummary(day);
+      setSummary(await api.daySummary(clockRes.date));
 
       if (clockRes.entryForHour) {
         const entry = clockRes.entryForHour;
@@ -136,11 +162,30 @@ export default function App() {
   };
 
   const canSubmit = useMemo(() => {
-    if (!clock || clock.sleeping) return false;
+    if (!clock) return false;
     if (selected.length === 0) return false;
     if (!report.trim()) return false;
     return selected.every((m) => (scores[m] ?? 0) >= 1);
   }, [clock, selected, scores, report]);
+
+  const markAwake = async () => {
+    if (!clock) return;
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.markAwake({
+        date: clock.date,
+        hour: clock.hour,
+      });
+      setNotice(res.message);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not mark awake");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const submit = async () => {
     if (!canSubmit || !clock) return;
@@ -178,7 +223,7 @@ export default function App() {
         timezoneOffsetMinutes: offset,
       });
       setSettings(res.settings);
-      setNotice("Sleep window updated.");
+      setNotice("Sleep window updated for today and ahead.");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not update settings");
@@ -197,6 +242,16 @@ export default function App() {
     );
   }
 
+  const statusLabel = !clock
+    ? ""
+    : clock.needsCheckIn
+      ? "Check-in due this hour"
+      : clock.entryForHour
+        ? "This hour already logged"
+        : clock.inSleepSchedule
+          ? "Sleep schedule — tap I’m awake to track"
+          : "Ready";
+
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
       <header className="animate-rise mb-8">
@@ -207,9 +262,10 @@ export default function App() {
           Hourly habit pulse
         </h1>
         <p className="mt-3 max-w-2xl text-base text-ink/75 sm:text-lg">
-          Log a few markers each waking hour — health, work, prep, workout,
-          social, stress management, study — and leave a short report. Tracking
-          stays off while you sleep.
+          Log a few markers each hour you’re awake — health, work, prep,
+          workout, social, stress management, study — plus a short report. Sleep
+          hours are a flexible schedule: adjust anytime, and track if you wake
+          early or stay up late.
         </p>
         {clock && (
           <div className="mt-5 flex flex-wrap items-center gap-3 text-sm">
@@ -218,25 +274,28 @@ export default function App() {
             </span>
             <span
               className={`rounded-full px-3 py-1.5 font-medium ${
-                clock.sleeping
-                  ? "bg-ink/10 text-ink/70"
-                  : clock.needsCheckIn
-                    ? "bg-amber/80 text-ink"
-                    : "bg-leaf/15 text-leaf"
+                clock.needsCheckIn
+                  ? "bg-amber/80 text-ink"
+                  : clock.entryForHour
+                    ? "bg-leaf/15 text-leaf"
+                    : "bg-ink/10 text-ink/70"
               }`}
             >
-              {clock.sleeping
-                ? "Sleeping — tracking paused"
-                : clock.needsCheckIn
-                  ? "Check-in due this hour"
-                  : "This hour already logged"}
+              {statusLabel}
             </span>
           </div>
         )}
       </header>
 
       <div className="mb-6 space-y-3">
-        <SleepBanner sleeping={!!clock?.sleeping} settings={settings} />
+        {clock && (
+          <SleepBanner
+            clock={clock}
+            settings={settings}
+            onAwake={() => void markAwake()}
+            busy={saving}
+          />
+        )}
         {error && (
           <div className="rounded-xl border border-clay/30 bg-clay/10 px-4 py-3 text-sm text-clay">
             {error}
@@ -254,6 +313,7 @@ export default function App() {
           <h2 className="font-display text-2xl text-moss">This hour</h2>
           <p className="mt-1 text-sm text-ink/65">
             Pick one or a few markers, score them 1–5, and write a short report.
+            You can always save — even inside the sleep schedule.
           </p>
 
           <div className="mt-5 flex flex-wrap gap-2">
@@ -263,9 +323,8 @@ export default function App() {
                 <button
                   key={m.id}
                   type="button"
-                  disabled={!!clock?.sleeping}
                   onClick={() => toggleMarker(m.id)}
-                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                  className={`rounded-xl px-3 py-2 text-sm font-semibold transition ${
                     on
                       ? "bg-moss text-sand"
                       : "bg-mist text-moss hover:bg-moss/10"
@@ -311,11 +370,10 @@ export default function App() {
             <textarea
               value={report}
               onChange={(e) => setReport(e.target.value)}
-              disabled={!!clock?.sleeping}
               rows={4}
               maxLength={1000}
               placeholder="What moved the needle this hour? Keep it short — a few markers is enough."
-              className="mt-2 w-full resize-y rounded-2xl border border-moss/15 bg-sand/60 px-4 py-3 text-sm outline-none ring-amber/40 placeholder:text-ink/40 focus:ring-2 disabled:opacity-50"
+              className="mt-2 w-full resize-y rounded-2xl border border-moss/15 bg-sand/60 px-4 py-3 text-sm outline-none ring-amber/40 placeholder:text-ink/40 focus:ring-2"
             />
           </label>
 
@@ -337,22 +395,25 @@ export default function App() {
           <section className="animate-rise rounded-[1.75rem] border border-moss/10 bg-moss p-5 text-sand sm:p-6">
             <h2 className="font-display text-2xl">Today’s rhythm</h2>
             <p className="mt-1 text-sm text-sand/70">
-              Awake hours vs logged check-ins
+              Scheduled awake hours plus any hours you marked awake today
             </p>
             <div className="mt-4 grid grid-cols-6 gap-1.5 sm:grid-cols-8">
               {(summary?.awakeHours ?? []).map((h) => {
                 const logged = summary?.loggedHours.includes(h);
                 const current = clock?.hour === h;
+                const override = summary?.awakeOverrideHours.includes(h);
                 return (
                   <div
                     key={h}
-                    title={formatHour(h)}
+                    title={`${formatHour(h)}${override ? " (awake override)" : ""}`}
                     className={`rounded-lg px-1 py-2 text-center text-[10px] font-semibold ${
                       logged
                         ? "bg-amber text-ink"
                         : current
                           ? "bg-sand/25 text-sand"
-                          : "bg-white/10 text-sand/70"
+                          : override
+                            ? "bg-leaf/40 text-sand"
+                            : "bg-white/10 text-sand/70"
                     }`}
                   >
                     {h}
@@ -372,7 +433,10 @@ export default function App() {
             <h2 className="font-display text-2xl text-moss">Marker averages</h2>
             <ul className="mt-4 space-y-3">
               {(summary?.markerAverages ?? []).map((m) => (
-                <li key={m.id} className="flex items-center justify-between gap-3">
+                <li
+                  key={m.id}
+                  className="flex items-center justify-between gap-3"
+                >
                   <span className="text-sm font-medium text-ink/80">
                     {m.label}
                   </span>
@@ -390,7 +454,8 @@ export default function App() {
           <section className="animate-rise rounded-[1.75rem] border border-moss/10 bg-white/55 p-5 backdrop-blur-sm sm:p-6">
             <h2 className="font-display text-2xl text-moss">Sleep window</h2>
             <p className="mt-1 text-sm text-ink/65">
-              No hourly prompts inside this range.
+              Adjust anytime during the day. It guides your rhythm — it never
+              blocks a check-in if you’re awake.
             </p>
             <div className="mt-4 grid grid-cols-2 gap-3">
               <label className="text-sm">
@@ -442,7 +507,7 @@ export default function App() {
         <div className="mt-5 space-y-4">
           {(summary?.reports ?? []).length === 0 ? (
             <p className="text-sm text-ink/55">
-              No reports yet. Save your first waking-hour pulse above.
+              No reports yet. Save your first pulse above whenever you’re awake.
             </p>
           ) : (
             [...(summary?.reports ?? [])]
