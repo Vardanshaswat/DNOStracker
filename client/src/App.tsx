@@ -13,6 +13,8 @@ import {
   type User,
 } from "./api";
 import Login from "./Login";
+import Dashboard from "./Dashboard";
+import AppHeader, { type AppView } from "./AppHeader";
 
 const SCORE_LABELS = ["Low", "Soft", "OK", "Strong", "Peak"];
 
@@ -93,9 +95,13 @@ function ScorePicker({
 
 function Tracker({
   user,
+  view,
+  onView,
   onLogout,
 }: {
   user: User;
+  view: AppView;
+  onView: (view: AppView) => void;
   onLogout: () => void;
 }) {
   const [markers, setMarkers] = useState<MarkerMeta[]>([]);
@@ -268,28 +274,12 @@ function Tracker({
   return (
     <main className="mx-auto min-h-screen max-w-5xl px-4 py-8 sm:py-12">
       <header className="animate-rise mb-8">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <p className="text-sm font-semibold tracking-[0.18em] text-leaf uppercase">
-            DNOStracker
-          </p>
-          <div className="flex items-center gap-3">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-moss text-xs font-bold text-sand">
-              {user.username.slice(0, 1).toUpperCase()}
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-moss">
-                {user.username}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => void onLogout()}
-              className="rounded-xl border border-moss/15 bg-white/70 px-3 py-1.5 text-xs font-semibold text-moss hover:bg-white"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
+        <AppHeader
+          user={user}
+          view={view}
+          onView={onView}
+          onLogout={onLogout}
+        />
         <h1 className="mt-2 font-display text-4xl leading-tight text-moss sm:text-5xl">
           Hourly habit pulse
         </h1>
@@ -579,6 +569,7 @@ function Tracker({
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [ready, setReady] = useState(false);
+  const [view, setView] = useState<AppView>("log");
 
   useEffect(() => {
     let cancelled = false;
@@ -604,6 +595,7 @@ export default function App() {
   const onLogout = useCallback(() => {
     void api.logout().catch(() => undefined);
     setUser(null);
+    setView("log");
   }, []);
 
   if (!ready) {
@@ -620,5 +612,18 @@ export default function App() {
     return <Login onSignedIn={onSignedIn} />;
   }
 
-  return <Tracker user={user} onLogout={onLogout} />;
+  if (view === "insights") {
+    return (
+      <Dashboard
+        user={user}
+        view={view}
+        onView={setView}
+        onLogout={onLogout}
+      />
+    );
+  }
+
+  return (
+    <Tracker user={user} view={view} onView={setView} onLogout={onLogout} />
+  );
 }

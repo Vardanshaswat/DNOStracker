@@ -149,6 +149,20 @@ export async function listEntries(
   );
 }
 
+export async function listEntriesInRange(
+  userId: string,
+  from: string,
+  to: string,
+): Promise<HourlyEntry[]> {
+  const store = await getStore();
+  const entries = store.entries.filter(
+    (e) => e.userId === userId && e.date >= from && e.date <= to,
+  );
+  return entries.sort((a, b) =>
+    a.date === b.date ? a.hour - b.hour : a.date.localeCompare(b.date),
+  );
+}
+
 export async function upsertEntry(entry: HourlyEntry): Promise<HourlyEntry> {
   const store = await getStore();
   const idx = store.entries.findIndex(

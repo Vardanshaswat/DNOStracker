@@ -18,11 +18,13 @@ import {
   signSession,
   signup,
 } from "./auth.js";
+import { buildInsights, parseInsightsRange } from "./insights.js";
 import {
   getAwakeHoursForDate,
   getEntry,
   getSettings,
   listEntries,
+  listEntriesInRange,
   markAwake,
   updateSettings,
   upsertEntry,
@@ -386,6 +388,20 @@ app.get("/api/day-summary", requireAuth, async (req, res) => {
       markers: e.markers.map((m) => m.marker),
     })),
   });
+});
+
+app.get("/api/insights", requireAuth, async (req, res) => {
+  const parsed = parseInsightsRange(req.query.from, req.query.to);
+  if ("error" in parsed) {
+    res.status(400).json({ error: parsed.error });
+    return;
+  }
+  const entries = await listEntriesInRange(
+    currentUser(req).id,
+    parsed.from,
+    parsed.to,
+  );
+  res.json(buildInsights(parsed.from, parsed.to, entries));
 });
 
 if (IS_PROD) {
