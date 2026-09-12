@@ -69,6 +69,39 @@ export type DaySummary = {
   reports: { hour: number; report: string; markers: Marker[] }[];
 };
 
+export type Insights = {
+  from: string;
+  to: string;
+  headline: {
+    daysInRange: number;
+    hoursLogged: number;
+    daysWithLogs: number;
+    coveragePercent: number;
+  };
+  markers: {
+    id: Marker;
+    label: string;
+    average: number | null;
+    samples: number;
+  }[];
+  byDay: {
+    date: string;
+    hoursLogged: number;
+    averageScore: number | null;
+  }[];
+  byHour: {
+    hour: number;
+    averageScore: number | null;
+    samples: number;
+  }[];
+  reports: {
+    date: string;
+    hour: number;
+    report: string;
+    markers: Marker[];
+  }[];
+};
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -139,6 +172,8 @@ export const api = {
     }),
   daySummary: (date: string) =>
     request<DaySummary>(`/api/day-summary?date=${date}`),
+  insights: (from: string, to: string) =>
+    request<Insights>(`/api/insights?from=${from}&to=${to}`),
 };
 
 export function formatHour(hour: number): string {
